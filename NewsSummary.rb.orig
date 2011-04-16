@@ -1,0 +1,211 @@
+#!/usr/bin/ruby
+require 'open-uri'
+$KCODE = "s"
+require 'kconv'
+#require 'MeCab' # need install MeCab and see mecab document
+require 'easymecab'
+require 'News'
+$debug = false
+
+class NewsSummary
+
+	# SETTINGS
+	def initialize
+		@topics = ""
+	end
+
+	def NewsSummary.process(args, default_io)
+		tag = args[0]
+		topics_url = args[1]
+		tag = "domestic" if args[0] == ""
+		topics_url = "scholastic_ability" if args[1] == ""
+		base_url = "http://dailynews.yahoo.co.jp/fc/"
+		p tag
+		p topics_url
+
+		newssummary = NewsSummary.new()
+		@contents = Hash.new() # hash key is url
+		@keywords = Hash.new() # hash key is url
+		@titles = Hash.new() # hash key is url
+		@sources = Hash.new() # hash key is url
+		@times = Hash.new() # hash key is url
+		@wordcount = Hash.new(0) # hash key is word
+
+		# get topics
+		@topics = newssummary.get_topics(base_url + tag + "/" + topics_url + "/index.html")
+		p base_url + tag + "/" + topics_url + "/index.html"
+		newssummary.output_header(@topics)
+
+		# multi page handling
+		(1..9).each{|i|
+			newssummary.extract_links(base_url + tag + "/" + topics_url + "/news_stories_" + i.to_s + ".html").each{|url|
+				news = News.new
+				news.store(url)
+				
+				# store each contents
+				content = news.get_content()
+				next if content.nil?
+				title = news.get_title()
+				@titles[url] = title
+				p title if $debug
+				source = news.get_source()
+				@sources[url] = source
+				p source if $debug
+				time = news.get_time()
+				@times[url] = time
+				p time.to_s if $debug
+
+				@contents[url] = content
+				p @contents[url] if $debug
+				# parse words by MeCab
+				m = MeCab.new("")
+				n = m.parse(title + "\n" + content)
+				@keywords[url] = newssummary.strip_by_wordclass(n)
+				p @keywords[url] if $debug
+				# count words
+				@keywords[url].split(" ").each{|word|
+					@wordcount[word] += 1
+				}
+			}
+		}
+		newssummary.output_wordcount(@wordcount) if $debug
+
+		# strip low relationship news
+		max_word = (@wordcount.sort{|a,b| a[1] <=> b[1]}[-1])[0]
+		puts "<h2>Max count words:", max_word, "</h2>"
+		puts "<h2>strip low relationship news</h2>"
+		puts "<ul>"
+		@keywords.each{|url, words|
+			unless words.split(" ").include?(max_word)
+				newssummary.output_content(url, "DELETE:" + @titles[url], @sources[url], @times[url].to_s, @contents[url], @wordcount, words)
+				@contents.delete(url)
+			end
+		}
+		puts "</ul>"
+
+		# <<TODO>> sorting? or clustering? or make summary?
+		# <<TODO>> format for outout
+		puts "<h2>relationship news</h2>"
+		puts "<ul>"
+		@contents.each{|url, content|
+			newssummary.output_content(url, @titles[url], @sources[url], @times[url].to_s, content, @wordcount, @keywords[url])
+		}
+		puts "</ul>"
+		newssummary.output_footer()
+	end
+	
+	def extract_links(url)
+		starttag = "<a name=\"ニュース\">"
+		endtag = "<!--■■■■■■■■■■■■■SQB■■■■■■■■■■■■■■■■-->"
+		urls = Array.new()
+		is_extract = false
+	
+		begin
+			open(url){|file|
+				while line = file.gets
+					line = line.tosjis
+					line.chomp!
+					is_extract = false if Regexp.compile(endtag) =~ line
+					line.scan(/http:\/\/[^"]+/){|url| urls.push(url)} if is_extract
+					is_extract = true if Regexp.compile(starttag) =~ line
+				end
+			}
+		rescue
+			p $!
+		end
+		# setting for Yahoo news?
+		urls.find_all{|url| /yahoo/ =~ url}
+	end
+	
+	def get_topics(url)
+		starttag = "<!---トピック名--->"
+		endtag = "<!---トピック名--->"
+		topics = ""
+		is_extract = false
+	
+		begin
+			open(url){|file|
+				while line = file.gets
+					line = line.tosjis
+					line.chomp!
+					is_extract = false if Regexp.compile(endtag) =~ line
+					if is_extract
+						# topics
+						if match = line.slice(/\<b\>([^\>]*)\<\/b\>/,1)
+							topics = match
+							break
+						end
+					end
+					is_extract = true if Regexp.compile(starttag) =~ line
+				end
+			}
+		rescue
+			p $!
+		end
+		topics
+	end
+
+	def strip_by_wordclass(n)
+		n.find_all{|word|
+			wordclass = word["wordclass"].split(",")
+			wordclass[0] == "名詞" and wordclass[1] != "数" and wordclass[1] != "代名詞"
+		}.collect{|word| word["surface"]}.join(" ")
+	end
+
+	def reform(body, wordcount)
+		wordcount.each{|key, value|
+		#	p "#{key}:#{value}" if value.to_i >= 10
+			body.gsub!(Regexp.compile(key), "<FONT size=\"+4\">#{key}</FONT>") if value.to_i >= 40
+			body.gsub!(Regexp.compile(key), "<FONT size=\"+4\">#{key}</FONT>") if (value.to_i < 40 && value.to_i >= 30)
+			body.gsub!(Regexp.compile(key), "<FONT size=\"+3\">#{key}</FONT>") if (value.to_i < 30 && value.to_i >= 20)
+			body.gsub!(Regexp.compile(key), "<FONT size=\"+2\">#{key}</FONT>") if (value.to_i < 20 && value.to_i >= 10)
+		}
+		body
+	end
+
+	def output_header(topics)
+		puts "<html>"
+		puts "<head>", "<title>", "ニュース - ", topics, "</title>", "</head>"
+		puts "<body>"
+		puts "<h1>", "ニュース - ", topics, "</h1>"
+	end
+
+	def output_footer()
+		puts "</body></html>"
+	end
+	
+	def output_content(url, title, source, time, content, count, words)
+		puts "<li><a href=", url, ">", title
+		puts "(", source, ")", "</a>"
+		puts "<small>(", time, ")</small>"
+		puts "</li><br>"
+		puts self.reform(content, count)
+		puts "<br>"
+		puts "<small>words:", words, "</small><br>"
+	end
+
+	def output_wordcount(count)
+		##output result
+		count.sort{|a,b|
+			a[1] <=> b[1]
+		}.each{|key, value|
+			print "#{key}: #{value}\n"
+		}
+	end
+
+	# this method is only for method/liblary first test
+	def NewsSummary.playingtest()
+		# <<TODO>> MeCab test(install mecab library if it needs)
+		# m = MeCab.new("-Ochasen")
+		m = MeCab.new("")
+		print m.parse("今日もしないとね")
+		#m = MeCab.new("-O wakati")
+		#p m.parse_file("test.txt")
+	end
+
+end
+
+if $0 == __FILE__
+  NewsSummary.process(ARGV, STDIN)
+#  NewsSummary.playingtest()
+end

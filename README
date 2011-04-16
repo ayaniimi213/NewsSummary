@@ -1,0 +1,161 @@
+NewsSummaryについて
+
+2011/01/26 niimi
+
+■ このプログラムは？
+
+ネットニュースのサイトに対し、多数のニュースを自動要約するシステムです。
+
+easymecab.rb: mecabを呼び出すためのラッパー
+news.rb: Yahoo!ニュースの記事1つ文から、必要な情報を抜き出す
+NewsSummary.rb: Yahoo!ニュースのトピックスページからニュース記事の集合を抜き出す。
+run.rb: 実行用クラス。入手するトピックスなどを指定する。
+
+■ 必要なもの
+
+- ruby
+- rubyライブラリ
+  - open-uri
+  - kconv
+- MeCab
+
+open-uri, kconvは標準的なrubyのインストールの場合、いっしょにインストールされているはず。
+
+■ 設定
+
+○ proxyの設定
+・ 設定(NewsSummary.rb, news.rb)
+NewsSummary.rb:$proxy = 'http://localhost:8080/' # or nil
+news.rb:$proxy = 'http://localhost:8080/' # or nil
+
+・これは
+proxyが必要な場合、news.rbとNewsSummary.rbの$proxyを変更する。
+不要な場合は、
+$proxy = nil
+とする。
+proxy.serverのportをプロキシとして使用する場合は、
+$proxy = 'http://proxy.server:port'
+のように指定する。
+
+○ MaCabへのパス
+・ 設定(easymecab.rb)
+@path = 'c:\Program Files\MeCab\bin\mecab.exe' # MeCabへのパス
+
+・これは
+easymecab.rbの@pathをMeCabコマンドへのパスになるように修正する。
+
+○ Yahoo!ニュースサイトへの対応
+・設定(news.rb)
+def store(url)内
+starttag = '<!--- __entry_body_start__ --->'
+endtag = '<!--- __entry_body_end__ --->'
+# title
+if match = line.slice(/\<h1 class=\"yjXL\"\>([^\>]*)\<\/h1\>/, 1)
+# source, date
+if match = line.match(/<p class="yjSt">(.*)配信&nbsp;\<a href=\"[^\>]*\"\>([^\>]*)\<\/a\>\<\/p\>/)
+# contents
+is_extract = false if Regexp.compile(endtag) =~ line
+
+・これは
+starttagからendtagまでの間からニュース記事を抜き出す。
+それぞれ、title, source, date, contentsに該当する部分が正規表現で埋め込んである。
+
+<<memo>>
+ほかのニュースサイトに対応させる場合、news.rbをスーパークラスにしてメソッド名を引き継いだクラスを作成し、そちらで各サイト毎の実装をするとよい。
+
+○ 取得ニュース関係のパラメータ
+・設定(NewsSummary.rb)
+$max_pages = 1
+$time_frame = (60 * 60 * 24)
+$score_threshold = 15
+
+def extract_links(url)
+
+・これは
+ニューストピックスのページを何ページ遡るのか?(max_pages), 類似判定をするニュースの間隔、スコアの閾値を設定する。
+
+extract_linksで各ニュースへのリンクを抽出している。抽出したリンクは、news.rbに渡される。
+ニュースリンクの抽出は正規表現によって、埋め込んである。
+
+○ 取得するニューストピックス関係のパラメータ
+・設定(run.rb)
+topics = %w(official_development_assistance yasukuni citizen_judge_system forced_labor_in_wwii the_constitution_of_japan social_insurance_agency_reform northern_territories economic_sanctions_on_north_korea regulation_reform japan_china_relations decrease_of_children)
+tag = "domestic"
+
+・これは
+取得するニューストピックスを指定する
+Command.runにtagとtopics_urlを渡すことで、取得するニューストピックスを指定している。
+複数のtag, topics_urlを指定するときは、コメントを参考にtopics_urlをarrayに格納した後、1要素毎、Command.runに引数として渡してあげると良い。
+
+
+■ 使い方
+
+./run.rb (または ruby run.rb)
+
+実行すると、カレントディレクトリにニューストピックス毎にニュースをまとめた、
+tag-topics_url.html
+のようなファイルが作成される。
+作成されたファイルは、ブラウザ等で閲覧できる。
+
+
+■ アルゴリズム
+
+提案するシステムは、以下の手順で動きます。
+1. トピックスのトップページのURLを取得
+2. 冒頭文と配信日時を取得
+3. 各文を形態素解析
+4. 名詞の抽出
+5. 関連性の高い記事の抽出
+6. 本文の比較と類似記事の削除
+7. 結果表示
+
+「5. 関連性の高い記事の抽出」では、抽出された品詞を辞書順にソートを行
+い、一番多く連続する名詞を見つける。この名詞をトピックスの関連性を特徴づ
+ける名詞と考え、この名詞を持つ記事のみをテキストファイルに出力する。ただ
+し、1つの記事内に同じ名詞が2つ以上存在する場合は、1つと数える。また、抽
+出されなかった記事を別のテキストファイルに出力する。
+記事が類似か判断する際に、抽出した文の単語数を考慮し、表現一致手法には下
+記の計算方法を用いる。xは基準となる文章Xの単語数、yは比較対象となる文章Y
+の単語数、mはXとYの両方に出現する単語数である。予備実験によりスレッシュ
+ホールドを検討し、Score(X, Y)が60%以上の時に2つの記事は類似と判断し古い
+ほうの記事を削除する。
+
+「6. 本文の比較と類似記事の削除 」では、次の方法により類似記事を削除す
+る。ニュースで類似した内容の記事が2日以上遅れて配信されることはない。抽
+出された関連性の高い記事で一番新しい記事を基準とし、前日の記事までにある
+名詞を比較し、基準となった記事にある名詞のうち定義する評価値である50%以
+上の名詞が、比較対象の記事に存在するときに、2つの記事は類似と判断し古い
+ほうの記事を削除する。
+
+○ スコアリングについて
+TF/IDFは文書集合からそれぞれの文書を表すのにふさわしいキーワードを抜き出
+すための指標です。他の文章ではあまり使っていないが、特定の文章のみでよく
+使われる単語を評価することができます。
+しかし、今回は、もともと同じ事件を複数のWebニュースサイトで記事にした場
+合にそれを、まとめるという処理を行いたいので、該当記事の直近に書かれた
+ニュース記事とくらべて、できるだけ同じような単語を使っている記事を類似記
+事と判定したかったので、TF/IDFを使わず、単純な頻度のみを指標としました。
+ただ、そのままだと記事中の単語数に影響しますので、Score(X,Y)を用いて類似
+度判定をしています。
+
+対象データをニュース記事としました。
+ニュース記事はタイトルや文書の先頭に要点を持ってくることが多いので、
+ニュース記事のタイトルと本文の先頭文（1文が短い場合は数文まとめて）を取
+得しています。
+
+記事か類似かどうかを判定するScore(X,Y)ですが、以下の式によって定義してい
+ます。
+
+Score(X,Y) = ( (m/x) + (m/y) ) /2 * 100
+
+xは基準となる文章Xの単語数、yは比較対象となる文章Yの単語数、mはXとYに両
+方に出現する単語数です。
+
+これにより、それぞれの文章の単語数を考慮して、類似判定を行っています。
+
+Score(X,Y)自体は、以下の文献のものを参考にしました。
+[9] Fujie, Y., Watabe, H., Kawaoka, T.: Article classification method
+using the calculation of the degree of association between articles and
+category attributes extracted from Web information, The 21st Annual
+Conference of the Japanese Society for Artificial Intelligence, 1G3-5
+(2007). (In Japanese)
